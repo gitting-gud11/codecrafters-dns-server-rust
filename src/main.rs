@@ -3,14 +3,14 @@ use std::net::UdpSocket;
 
 struct DnsHeader {
     packet_identifer: u16,
-    is_reply_packet: bool, //packed to 1 bit when serializing
-    operation_code: u8,
+    is_reply_packet: bool,        //packed to 1 bit when serializing
+    operation_code: u8,           //packed to 4 bits when serializing
     is_authoritative: bool,       //packed to 1 bit when serializing
     is_truncated: bool,           //packed to 1 bit when serializing
     recusion_is_desired: bool,    //packed to 1 bit when serializing
     recursion_is_available: bool, //packed to 1 bit when serializing
     reserved: u8,                 //packed to 3 bits when serializing
-    response_code: u8,
+    response_code: u8,            //packed to 4 bits when serializing
     question_count: u16,
     answer_record_count: u16,
     authority_record_count: u16,
@@ -19,10 +19,10 @@ struct DnsHeader {
 
 impl DnsHeader {
     pub fn from_bytes(data: &[u8; 12]) -> DnsHeader {
-        let flags_slice: &[u8; 2] = data[2..4]
+        let flag_bytes: [u8; 2] = data[2..4]
             .try_into()
             .expect("DNS message header contains 12 bytes");
-        let header_flags = DnsHeader::get_flags(flags_slice);
+        let header_flags = DnsHeader::get_flags(u16::from_be_bytes(flag_bytes));
         DnsHeader {
             packet_identifer: u16::from_be_bytes([data[0], data[1]]),
             is_reply_packet: header_flags[0] != 0,
@@ -41,7 +41,44 @@ impl DnsHeader {
     }
 
     pub fn to_bytes(header: &DnsHeader) -> [u8; 12] {
-        todo!()
+        let header_byte_fields: Vec<[u8; 2]> = vec![
+            header.packet_identifer.to_be_bytes(),
+            DnsHeader::pack_flags(header), //converted to big-endian
+            header.question_count.to_be_bytes(),
+            header.answer_record_count.to_be_bytes(),
+            header.authority_record_count.to_be_bytes(),
+            header.additional_record_count.to_be_bytes(),
+        ];
+        header_byte_fields
+            .into_flattened()
+            .try_into()
+            .expect("Header serialization is 12 bytes")
+    }
+
+    fn get_flags(flag_bits: u16) -> [u8; 8] {
+        let mut header_flags: [u8; 8] = [0; 8];
+        header_flags[0] = ((flag_bits >> 15) & 1) as u8; //Query response indicator
+        header_flags[1] = ((flag_bits >> 11) & 0xF) as u8; //Operation code
+        header_flags[2] = ((flag_bits >> 10) & 1) as u8; //Authoritative answer
+        header_flags[3] = ((flag_bits >> 9) & 1) as u8; //Truncation flag
+        header_flags[4] = ((flag_bits >> 8) & 1) as u8; //Recursion desired
+        header_flags[5] = ((flag_bits >> 7) & 1) as u8; //Recursion available
+        header_flags[6] = ((flag_bits >> 4) & 0x7) as u8; //Reserved
+        header_flags[7] = (flag_bits & 0xF) as u8; //Response code
+        header_flags
+    }
+
+    fn pack_flags(header: &DnsHeader) -> [u8; 2] {
+        let mut flag_bits: u16 = 0;
+        flag_bits |= 1 << 15; //Set Query response indicator (Fixed for Reply Packet)
+        flag_bits |= (header.operation_code as u16) << 11; //Set Operation code
+        flag_bits |= (header.is_authoritative as u16) << 10; //Set Authortitative answer
+        flag_bits |= (header.is_truncated as u16) << 9; //Set Truncation flag
+        flag_bits |= (header.recusion_is_desired as u16) << 8; //Set Recursion desired flag
+        flag_bits |= (header.recursion_is_available as u16) << 7; //Set Recursion available flag
+        flag_bits |= (header.reserved as u16) << 4; //Set Reserved
+        flag_bits |= header.response_code as u16; //Set Response code
+        flag_bits.to_be_bytes()
     }
 
     pub fn print_header(header: &DnsHeader) {
@@ -53,7 +90,7 @@ impl DnsHeader {
         println!("is_authoritative:{}", header.is_authoritative);
         println!("is_truncated:{}", header.is_truncated);
         println!("recusion_is_desired:{}", header.recusion_is_desired);
-        println!("recursion_is_available:{}",header.recursion_is_available);
+        println!("recursion_is_available:{}", header.recursion_is_available);
         println!("reserved:{}", header.reserved);
         println!("response_code:{}", header.response_code);
         println!("question_count:{}", header.question_count);
@@ -61,19 +98,6 @@ impl DnsHeader {
         println!("authority_record_count:{}", header.authority_record_count);
         println!("additional_record_count:{}", header.additional_record_count);
         println!("----------");
-    }
-
-    fn get_flags(data: &[u8; 2]) -> [u8; 8] {
-        let mut header_flags: [u8; 8] = [0; 8];
-        header_flags[0] = data[0] & 1; //Query response indicator
-        header_flags[1] = (data[0] >> 1) & 0xF; //Operatiom code
-        header_flags[2] = (data[0] >> 5) & 1; //Authoritative Answer
-        header_flags[3] = (data[0] >> 6) & 1; //Truncation flag
-        header_flags[4] = (data[0] >> 7) & 1; //Recursion desired
-        header_flags[5] = data[1] & 1; //Recursion available
-        header_flags[6] = (data[1] >> 1) & 0x7; //Reserved
-        header_flags[7] = (data[1] >> 4) & 0xF; //Response code
-        header_flags
     }
 }
 
@@ -94,10 +118,10 @@ fn main() {
                 let response = if size >= 12 {
                     let header_slice: &[u8; 12] = buf[0..12].try_into().expect("msg");
                     let response_header = DnsHeader::from_bytes(header_slice);
-                    DnsHeader::print_header(&response_header);
-                    []
+                    DnsHeader::to_bytes(&response_header)
                 } else {
-                    []
+                    println!("Entered other conditional");
+                    [0; 12]
                 };
                 udp_socket
                     .send_to(&response, source)
