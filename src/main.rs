@@ -70,7 +70,7 @@ impl DnsHeader {
 
     fn pack_flags(header: &DnsHeader) -> [u8; 2] {
         let mut flag_bits: u16 = 0;
-        flag_bits |= 1 << 15; //Set Query response indicator (Fixed for Reply Packet)
+        flag_bits |= (header.is_reply_packet as u16) << 15; //Set Query response indicator
         flag_bits |= (header.operation_code as u16) << 11; //Set Operation code
         flag_bits |= (header.is_authoritative as u16) << 10; //Set Authortitative answer
         flag_bits |= (header.is_truncated as u16) << 9; //Set Truncation flag
@@ -101,11 +101,115 @@ impl DnsHeader {
     }
 }
 
-struct DnsMessage {
-    header: DnsHeader,
+struct DNSQuestion {
+    domain_name: Vec<String>,
+    question_type: u16,
+    question_class: u16,
 }
 
-impl DnsMessage {}
+impl DNSQuestion {
+    pub fn from_bytes(data: &[u8; 500]) -> Vec<DNSQuestion> {
+        let capacity_heuristic_bound = 10;
+        let mut questions_list = Vec::with_capacity(capacity_heuristic_bound);
+        let mut current_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
+        let mut index = 0;
+
+        while index < data.len() {
+            let label_length = data[index] as usize;
+            if label_length == 0 {
+                if current_domain_labels.is_empty() {
+                    break;
+                }
+                questions_list.push(DNSQuestion {
+                    domain_name: current_domain_labels.clone(),
+                    question_type: u16::from_be_bytes([data[index + 1], data[index + 2]]),
+                    question_class: u16::from_be_bytes([data[index + 3], data[index + 4]]),
+                });
+                current_domain_labels.clear();
+                index += 5; //Jump to beginning of next label
+            }
+            let label_slice = &data[index + 1..(index + label_length + 1)];
+            current_domain_labels.push(String::from_utf8_lossy(label_slice).to_string());
+            index += label_length + 1; //Jump to beginning of next label
+        }
+        questions_list
+    }
+
+    pub fn to_bytes(question: &DNSQuestion) -> Vec<u8> {
+        let mut bytes_buffer: Vec<u8> = question
+            .domain_name
+            .clone()
+            .into_iter()
+            .flat_map(|s| s.into_bytes())
+            .collect();
+
+        bytes_buffer.extend(question.question_type.to_be_bytes());
+        bytes_buffer.extend(question.question_class.to_be_bytes());
+        bytes_buffer
+    }
+
+    pub fn sequence_to_bytes(question_list: Vec<DNSQuestion>) -> Vec<u8> {
+        question_list
+            .iter()
+            .flat_map(DNSQuestion::to_bytes)
+            .collect()
+    }
+}
+
+struct DNSAnswer {
+    domain_name: Vec<String>,
+    answer_type: u16,
+    answer_class: u16,
+    time_to_live: u32,
+    length: u16,
+    data: Vec<u8>,
+}
+
+impl DNSAnswer {}
+
+struct DnsMessage {
+    header: DnsHeader,
+    questions: Vec<DNSQuestion>,
+    answers: Vec<DNSAnswer>,
+    additional: Vec<u8>,
+}
+
+impl DnsMessage {
+    pub fn from_bytes_query(data: [u8; 512]) -> DnsMessage {
+        let data_header: [u8; 12] = data[0..12]
+            .try_into()
+            .expect("query has 12 bytes for a header");
+        let data_question: [u8; 500] = data[12..]
+            .try_into()
+            .expect("query has 500 bytes for question");
+        DnsMessage {
+            header: DnsHeader::from_bytes(&data_header),
+            questions: (DNSQuestion::from_bytes(&data_question)),
+            answers: Vec::new(),
+            additional: Vec::new(),
+        }
+    }
+
+    pub fn to_bytes(message: DnsMessage) -> [u8; 512] {
+        let header_bytes = DnsHeader::to_bytes(&message.header);
+        let questions_vec_bytes = DNSQuestion::sequence_to_bytes(message.questions);
+        let mut message_buffer = [0; 512];
+        message_buffer[0..12].copy_from_slice(&header_bytes);
+        message_buffer[12..(12 + questions_vec_bytes.len())].copy_from_slice(&questions_vec_bytes);
+        message_buffer
+    }
+
+    pub fn build_response(dns_query: DnsMessage) -> DnsMessage {
+        todo!()
+    }
+
+    pub fn response_to_query_bytes(query: [u8; 512]) -> [u8; 512] {
+        let dns_query_message = DnsMessage::from_bytes_query(query);
+        let dns_response_message = DnsMessage::build_response(dns_query_message);
+        // DnsMessage::to_bytes(dns_response_message)
+        todo!()
+    }
+}
 
 fn main() {
     let udp_socket = UdpSocket::bind("127.0.0.1:2053").expect("Failed to bind to address");
@@ -117,10 +221,11 @@ fn main() {
                 println!("Received {} bytes from {}", size, source);
                 let response = if size >= 12 {
                     let header_slice: &[u8; 12] = buf[0..12].try_into().expect("msg");
+                    let sub_buf = &buf[12..40];
+                    println!("{:x?}", sub_buf);
                     let response_header = DnsHeader::from_bytes(header_slice);
                     DnsHeader::to_bytes(&response_header)
                 } else {
-                    println!("Entered other conditional");
                     [0; 12]
                 };
                 udp_socket
