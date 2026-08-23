@@ -104,7 +104,7 @@ impl DnsHeader {
 
 #[derive(Clone)]
 struct DNSQuestion {
-    domain_labels: Vec<String>, //Maybe use a deque? Extend this to have domain_bytes. rename domain_name to labels
+    domain_labels: Vec<String>,
     question_type: u16,
     question_class: u16,
 }
@@ -120,7 +120,6 @@ impl DNSQuestion {
             let label_length = data[index] as usize;
             if label_length == 0 {
                 if current_domain_labels.is_empty() {
-                    //Look at this again to make sure I'm doing my null terminator
                     break;
                 }
                 questions_list.push(DNSQuestion {
@@ -139,13 +138,13 @@ impl DNSQuestion {
         questions_list
     }
 
-    pub fn to_bytes(question: DNSQuestion) -> Vec<u8> {
+    pub fn to_bytes(question: &DNSQuestion) -> Vec<u8> {
         let capacity_heuristic_bound = 500;
         let mut bytes_buffer = Vec::with_capacity(capacity_heuristic_bound);
 
-        for label in question.domain_labels {
+        for label in &question.domain_labels {
             bytes_buffer.push((label.len()) as u8);
-            bytes_buffer.extend(label.into_bytes());
+            bytes_buffer.extend(label.as_bytes());
         }
         bytes_buffer.push(0); //Null terminator (Terminates domain name)
         bytes_buffer.extend(question.question_type.to_be_bytes());
@@ -153,9 +152,9 @@ impl DNSQuestion {
         bytes_buffer
     }
 
-    pub fn sequence_to_bytes(question_list: Vec<DNSQuestion>) -> Vec<u8> {
+    pub fn sequence_to_bytes(question_list: &[DNSQuestion]) -> Vec<u8> {
         question_list
-            .into_iter()
+            .iter()
             .flat_map(DNSQuestion::to_bytes)
             .collect()
     }
@@ -188,6 +187,11 @@ struct DNSAnswer {
 }
 
 impl DNSAnswer {
+    pub fn to_bytes(answer: &DNSAnswer) {
+        let capacity_heuristic_bound = 500;
+        // let mut bytes_buffer = Vec::with_capacity(capacity_heuristic_bound);
+        todo!();
+    }
     pub fn print_answer(answer: &DNSAnswer) {
         println!("DNS Answer");
         println!("----------");
@@ -207,8 +211,6 @@ impl DNSAnswer {
             DNSAnswer::print_answer(answer);
         }
     }
-    //want a from_bytes and to_bytes
-    //probably just hardcode this for now
 }
 
 #[derive(Clone)]
@@ -239,7 +241,7 @@ impl DnsMessage {
     pub fn to_bytes(message: &DnsMessage) -> ([u8; 512], usize) {
         let header_bytes = DnsHeader::to_bytes(&message.header);
         let num_header_bytes = header_bytes.len();
-        let questions_vec_bytes = DNSQuestion::sequence_to_bytes(message.questions.clone());
+        let questions_vec_bytes = DNSQuestion::sequence_to_bytes(&message.questions);
         let mut message_buffer = [0; 512];
         message_buffer[0..num_header_bytes].copy_from_slice(&header_bytes); //Header fixed at 12 bytes
         message_buffer[num_header_bytes..(num_header_bytes + questions_vec_bytes.len())]
@@ -250,7 +252,7 @@ impl DnsMessage {
         )
     }
 
-    fn build_response_header(dns_query_header: &DnsHeader, qdcount: u16, acount: u16) -> DnsHeader {
+    fn build_response_header(dns_query_header: &DnsHeader, acount: u16) -> DnsHeader {
         DnsHeader {
             packet_identifer: dns_query_header.packet_identifer,
             is_reply_packet: true, //Set to true for response packet
@@ -261,7 +263,7 @@ impl DnsMessage {
             recursion_is_available: false, //Recursion not currently supported
             reserved: dns_query_header.reserved,
             response_code: dns_query_header.response_code,
-            question_count: qdcount,
+            question_count: dns_query_header.question_count,
             answer_record_count: acount,
             authority_record_count: dns_query_header.authority_record_count, //Look into modifying these
             additional_record_count: dns_query_header.additional_record_count, //Looking into modifying these
@@ -272,11 +274,8 @@ impl DnsMessage {
         let response_questions = dns_query.questions.clone();
         let response_answers = dns_query.answers.clone(); //Will implement this later
         let response_additional = dns_query.additional.clone();
-        let response_header = DnsMessage::build_response_header(
-            &dns_query.header,
-            response_questions.len() as u16,
-            response_answers.len() as u16,
-        );
+        let response_header =
+            DnsMessage::build_response_header(&dns_query.header, response_answers.len() as u16);
         DnsMessage {
             header: response_header,
             questions: response_questions,
