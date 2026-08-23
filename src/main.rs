@@ -104,7 +104,7 @@ impl DnsHeader {
 
 #[derive(Clone)]
 struct DNSQuestion {
-    domain_name: Vec<String>,
+    domain_name: Vec<String>, //Maybe use a deque?
     question_type: u16,
     question_class: u16,
 }
@@ -116,11 +116,11 @@ impl DNSQuestion {
         let mut current_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
         let mut index = 0;
 
-        while  index < data.len() {
+        while index < data.len() {
             let label_length = data[index] as usize;
             if label_length == 0 {
                 if current_domain_labels.is_empty() {
-                    break; //data is malformed, implement error handling for this
+                    break;
                 }
                 questions_list.push(DNSQuestion {
                     domain_name: current_domain_labels.clone(),
@@ -148,6 +148,7 @@ impl DNSQuestion {
 
         bytes_buffer.extend(question.question_type.to_be_bytes());
         bytes_buffer.extend(question.question_class.to_be_bytes());
+        bytes_buffer.push(0); //Null terminator
         bytes_buffer
     }
 
@@ -205,6 +206,8 @@ impl DNSAnswer {
             DNSAnswer::print_answer(answer);
         }
     }
+    //want a from_bytes and to_bytes
+    //probably just hardcode this for now
 }
 
 #[derive(Clone)]
@@ -232,14 +235,16 @@ impl DnsMessage {
         }
     }
 
-    pub fn to_bytes(message: &DnsMessage) -> ([u8; 512],usize) {
-        let header_bytes = DnsHeader::to_bytes(&message.header); 
-        let num_header_bytes=header_bytes.len();
+    pub fn to_bytes(message: &DnsMessage) -> ([u8; 512], usize) {
+        let header_bytes = DnsHeader::to_bytes(&message.header);
+        let num_header_bytes = header_bytes.len();
         let questions_vec_bytes = DNSQuestion::sequence_to_bytes(message.questions.clone());
         let mut message_buffer = [0; 512];
         message_buffer[0..num_header_bytes].copy_from_slice(&header_bytes); //Header fixed at 12 bytes
-        message_buffer[num_header_bytes..(num_header_bytes + questions_vec_bytes.len())].copy_from_slice(&questions_vec_bytes);
-        (message_buffer,12)
+        message_buffer[num_header_bytes..(num_header_bytes + questions_vec_bytes.len())]
+            .copy_from_slice(&questions_vec_bytes);
+        DnsMessage::print_message(message);
+        (message_buffer, header_bytes.len()+questions_vec_bytes.len())
     }
 
     fn build_response_header(dns_query_header: &DnsHeader, qdcount: u16, acount: u16) -> DnsHeader {
@@ -277,7 +282,7 @@ impl DnsMessage {
         }
     }
 
-    pub fn response_to_query_bytes(query: &[u8; 512]) -> ([u8; 512],usize) {
+    pub fn response_to_query_bytes(query: &[u8; 512]) -> ([u8; 512], usize) {
         let dns_query_message = DnsMessage::from_bytes(query);
         let dns_response_message = DnsMessage::build_response(&dns_query_message);
         DnsMessage::to_bytes(&dns_response_message)
@@ -311,8 +316,9 @@ fn main() {
         match udp_socket.recv_from(&mut buf) {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
-                let (response_buffer,num_encoded_bytes) = DnsMessage::response_to_query_bytes(&buf);
-                let response =&response_buffer[0..num_encoded_bytes];
+                let (response_buffer, num_encoded_bytes) =
+                    DnsMessage::response_to_query_bytes(&buf);
+                let response = &response_buffer[0..num_encoded_bytes];
                 udp_socket
                     .send_to(response, source) //Temporary until I have truncated
                     .expect("Failed to send response");
