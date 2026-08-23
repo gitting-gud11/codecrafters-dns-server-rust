@@ -326,7 +326,7 @@ impl DnsMessage {
             recursion_is_desired: dns_query_header.recursion_is_desired,
             recursion_is_available: false, //Recursion not currently supported
             reserved: dns_query_header.reserved,
-            response_code: dns_query_header.response_code,
+            response_code: if dns_query_header.operation_code==0 {0} else {4}, //Only standard query currently supported
             question_count: dns_query_header.question_count,
             answer_record_count: acount,
             authority_record_count: dns_query_header.authority_record_count, //Look into modifying these
