@@ -110,13 +110,13 @@ struct DNSQuestion {
 }
 
 impl DNSQuestion {
-    pub fn from_bytes(data: &[u8; 500], qcount: usize) -> Vec<DNSQuestion> {
+    pub fn from_bytes(data: &[u8; 500]) -> Vec<DNSQuestion> {
         let capacity_heuristic_bound = 10;
         let mut questions_list = Vec::with_capacity(capacity_heuristic_bound);
         let mut current_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
         let mut index = 0;
 
-        while questions_list.len() < qcount && index < data.len() {
+        while  index < data.len() {
             let label_length = data[index] as usize;
             if label_length == 0 {
                 if current_domain_labels.is_empty() {
@@ -224,10 +224,9 @@ impl DnsMessage {
             .try_into()
             .expect("query has 500 bytes for question");
         let dns_header = DnsHeader::from_bytes(&data_header);
-        let qcount = dns_header.question_count as usize;
         DnsMessage {
             header: dns_header,
-            questions: (DNSQuestion::from_bytes(&data_question, qcount)),
+            questions: (DNSQuestion::from_bytes(&data_question)),
             answers: Vec::new(),
             additional: Vec::new(),
         }
@@ -281,7 +280,6 @@ impl DnsMessage {
     pub fn response_to_query_bytes(query: &[u8; 512]) -> ([u8; 512],usize) {
         let dns_query_message = DnsMessage::from_bytes(query);
         let dns_response_message = DnsMessage::build_response(&dns_query_message);
-        //Header gives the number of bytes
         DnsMessage::to_bytes(&dns_response_message)
     }
 
