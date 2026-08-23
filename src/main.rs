@@ -42,8 +42,6 @@ impl DnsHeader {
     }
 
     pub fn to_bytes(header: &DnsHeader) -> [u8; 12] {
-        println!("In to_bytes have recursion_is_desired is {}",header.recursion_is_desired);
-        // println!("To Bytes {:b}",DnsHeader::pack_flags(header));
         let header_byte_fields: Vec<[u8; 2]> = vec![
             header.packet_identifer.to_be_bytes(),
             DnsHeader::pack_flags(header), //converted to big-endian
@@ -68,7 +66,6 @@ impl DnsHeader {
         header_flags[5] = ((flag_bits >> 7) & 1) as u8; //Recursion available
         header_flags[6] = ((flag_bits >> 4) & 0x7) as u8; //Reserved
         header_flags[7] = (flag_bits & 0xF) as u8; //Response code
-        println!("Before returing from get_flags have recursion_is_desired as {}",header_flags[4]);
         header_flags
     }
 
@@ -236,15 +233,14 @@ impl DnsMessage {
         }
     }
 
-    pub fn to_bytes(message: &DnsMessage) -> [u8; 512] {
-        let header_bytes = DnsHeader::to_bytes(&message.header);
+    pub fn to_bytes(message: &DnsMessage) -> ([u8; 512],usize) {
+        let header_bytes = DnsHeader::to_bytes(&message.header); 
+        let num_header_bytes=header_bytes.len();
         let questions_vec_bytes = DNSQuestion::sequence_to_bytes(message.questions.clone());
         let mut message_buffer = [0; 512];
-        message_buffer[0..12].copy_from_slice(&header_bytes);
-        message_buffer[12..(12 + questions_vec_bytes.len())].copy_from_slice(&questions_vec_bytes);
-        println!("{:02X?}", message_buffer);
-        DnsMessage::print_message(message);
-        message_buffer
+        message_buffer[0..num_header_bytes].copy_from_slice(&header_bytes); //Header fixed at 12 bytes
+        message_buffer[num_header_bytes..(num_header_bytes + questions_vec_bytes.len())].copy_from_slice(&questions_vec_bytes);
+        (message_buffer,12)
     }
 
     fn build_response_header(dns_query_header: &DnsHeader, qdcount: u16, acount: u16) -> DnsHeader {
@@ -282,9 +278,10 @@ impl DnsMessage {
         }
     }
 
-    pub fn response_to_query_bytes(query: &[u8; 512]) -> [u8; 512] {
+    pub fn response_to_query_bytes(query: &[u8; 512]) -> ([u8; 512],usize) {
         let dns_query_message = DnsMessage::from_bytes(query);
         let dns_response_message = DnsMessage::build_response(&dns_query_message);
+        //Header gives the number of bytes
         DnsMessage::to_bytes(&dns_response_message)
     }
 
@@ -316,9 +313,10 @@ fn main() {
         match udp_socket.recv_from(&mut buf) {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
-                let response = DnsMessage::response_to_query_bytes(&buf);
+                let (response_buffer,num_encoded_bytes) = DnsMessage::response_to_query_bytes(&buf);
+                let response =&response_buffer[0..num_encoded_bytes];
                 udp_socket
-                    .send_to(&response[0..12], source) //Temporary until I have truncated
+                    .send_to(response, source) //Temporary until I have truncated
                     .expect("Failed to send response");
             }
             Err(e) => {
