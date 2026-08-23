@@ -8,7 +8,7 @@ struct DnsHeader {
     operation_code: u8,           //packed to 4 bits when serializing
     is_authoritative: bool,       //packed to 1 bit when serializing
     is_truncated: bool,           //packed to 1 bit when serializing
-    recursion_is_desired: bool,    //packed to 1 bit when serializing
+    recursion_is_desired: bool,   //packed to 1 bit when serializing
     recursion_is_available: bool, //packed to 1 bit when serializing
     reserved: u8,                 //packed to 3 bits when serializing
     response_code: u8,            //packed to 4 bits when serializing
@@ -42,6 +42,8 @@ impl DnsHeader {
     }
 
     pub fn to_bytes(header: &DnsHeader) -> [u8; 12] {
+        println!("In to_bytes have recursion_is_desired is {}",header.recursion_is_desired);
+        // println!("To Bytes {:b}",DnsHeader::pack_flags(header));
         let header_byte_fields: Vec<[u8; 2]> = vec![
             header.packet_identifer.to_be_bytes(),
             DnsHeader::pack_flags(header), //converted to big-endian
@@ -66,6 +68,7 @@ impl DnsHeader {
         header_flags[5] = ((flag_bits >> 7) & 1) as u8; //Recursion available
         header_flags[6] = ((flag_bits >> 4) & 0x7) as u8; //Reserved
         header_flags[7] = (flag_bits & 0xF) as u8; //Response code
+        println!("Before returing from get_flags have recursion_is_desired as {}",header_flags[4]);
         header_flags
     }
 
@@ -110,17 +113,17 @@ struct DNSQuestion {
 }
 
 impl DNSQuestion {
-    pub fn from_bytes(data: &[u8; 500]) -> Vec<DNSQuestion> {
+    pub fn from_bytes(data: &[u8; 500], qcount: usize) -> Vec<DNSQuestion> {
         let capacity_heuristic_bound = 10;
         let mut questions_list = Vec::with_capacity(capacity_heuristic_bound);
         let mut current_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
         let mut index = 0;
 
-        while index < data.len() {
+        while questions_list.len() < qcount && index < data.len() {
             let label_length = data[index] as usize;
             if label_length == 0 {
                 if current_domain_labels.is_empty() {
-                    break;
+                    break; //data is malformed, implement error handling for this
                 }
                 questions_list.push(DNSQuestion {
                     domain_name: current_domain_labels.clone(),
@@ -223,9 +226,11 @@ impl DnsMessage {
         let data_question: [u8; 500] = data[12..]
             .try_into()
             .expect("query has 500 bytes for question");
+        let dns_header = DnsHeader::from_bytes(&data_header);
+        let qcount = dns_header.question_count as usize;
         DnsMessage {
-            header: DnsHeader::from_bytes(&data_header),
-            questions: (DNSQuestion::from_bytes(&data_question)),
+            header: dns_header,
+            questions: (DNSQuestion::from_bytes(&data_question, qcount)),
             answers: Vec::new(),
             additional: Vec::new(),
         }
@@ -237,7 +242,7 @@ impl DnsMessage {
         let mut message_buffer = [0; 512];
         message_buffer[0..12].copy_from_slice(&header_bytes);
         message_buffer[12..(12 + questions_vec_bytes.len())].copy_from_slice(&questions_vec_bytes);
-        println!("{:02X?}",message_buffer);
+        println!("{:02X?}", message_buffer);
         DnsMessage::print_message(message);
         message_buffer
     }
@@ -313,7 +318,7 @@ fn main() {
                 println!("Received {} bytes from {}", size, source);
                 let response = DnsMessage::response_to_query_bytes(&buf);
                 udp_socket
-                    .send_to(&response, source)
+                    .send_to(&response[0..12], source) //Temporary until I have truncated
                     .expect("Failed to send response");
             }
             Err(e) => {
