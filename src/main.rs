@@ -8,7 +8,7 @@ struct DnsHeader {
     operation_code: u8,           //packed to 4 bits when serializing
     is_authoritative: bool,       //packed to 1 bit when serializing
     is_truncated: bool,           //packed to 1 bit when serializing
-    recusion_is_desired: bool,    //packed to 1 bit when serializing
+    recursion_is_desired: bool,    //packed to 1 bit when serializing
     recursion_is_available: bool, //packed to 1 bit when serializing
     reserved: u8,                 //packed to 3 bits when serializing
     response_code: u8,            //packed to 4 bits when serializing
@@ -30,7 +30,7 @@ impl DnsHeader {
             operation_code: header_flags[1],
             is_authoritative: header_flags[2] != 0,
             is_truncated: header_flags[3] != 0,
-            recusion_is_desired: header_flags[4] != 0,
+            recursion_is_desired: header_flags[4] != 0,
             recursion_is_available: header_flags[5] != 0,
             reserved: header_flags[6],
             response_code: header_flags[7],
@@ -75,7 +75,7 @@ impl DnsHeader {
         flag_bits |= (header.operation_code as u16) << 11; //Set Operation code
         flag_bits |= (header.is_authoritative as u16) << 10; //Set Authortitative answer
         flag_bits |= (header.is_truncated as u16) << 9; //Set Truncation flag
-        flag_bits |= (header.recusion_is_desired as u16) << 8; //Set Recursion desired flag
+        flag_bits |= (header.recursion_is_desired as u16) << 8; //Set Recursion desired flag
         flag_bits |= (header.recursion_is_available as u16) << 7; //Set Recursion available flag
         flag_bits |= (header.reserved as u16) << 4; //Set Reserved
         flag_bits |= header.response_code as u16; //Set Response code
@@ -90,7 +90,7 @@ impl DnsHeader {
         println!("operation_code:{}", header.operation_code);
         println!("is_authoritative:{}", header.is_authoritative);
         println!("is_truncated:{}", header.is_truncated);
-        println!("recusion_is_desired:{}", header.recusion_is_desired);
+        println!("recursion_is_desired:{}", header.recursion_is_desired);
         println!("recursion_is_available:{}", header.recursion_is_available);
         println!("reserved:{}", header.reserved);
         println!("response_code:{}", header.response_code);
@@ -237,6 +237,8 @@ impl DnsMessage {
         let mut message_buffer = [0; 512];
         message_buffer[0..12].copy_from_slice(&header_bytes);
         message_buffer[12..(12 + questions_vec_bytes.len())].copy_from_slice(&questions_vec_bytes);
+        println!("{:02X?}",message_buffer);
+        DnsMessage::print_message(message);
         message_buffer
     }
 
@@ -247,7 +249,7 @@ impl DnsMessage {
             operation_code: dns_query_header.operation_code,
             is_authoritative: dns_query_header.is_authoritative,
             is_truncated: dns_query_header.is_truncated,
-            recusion_is_desired: dns_query_header.recusion_is_desired,
+            recursion_is_desired: dns_query_header.recursion_is_desired,
             recursion_is_available: false, //Recursion not currently supported
             reserved: dns_query_header.reserved,
             response_code: dns_query_header.response_code,
