@@ -104,7 +104,7 @@ impl DnsHeader {
 
 #[derive(Clone)]
 struct DNSQuestion {
-    domain_name: Vec<String>, //Maybe use a deque?
+    domain_labels: Vec<String>, //Maybe use a deque? Extend this to have domain_bytes. rename domain_name to labels
     question_type: u16,
     question_class: u16,
 }
@@ -120,10 +120,11 @@ impl DNSQuestion {
             let label_length = data[index] as usize;
             if label_length == 0 {
                 if current_domain_labels.is_empty() {
+                    //Look at this again to make sure I'm doing my null terminator
                     break;
                 }
                 questions_list.push(DNSQuestion {
-                    domain_name: current_domain_labels.clone(),
+                    domain_labels: current_domain_labels.clone(),
                     question_type: u16::from_be_bytes([data[index + 1], data[index + 2]]),
                     question_class: u16::from_be_bytes([data[index + 3], data[index + 4]]),
                 });
@@ -138,23 +139,23 @@ impl DNSQuestion {
         questions_list
     }
 
-    pub fn to_bytes(question: &DNSQuestion) -> Vec<u8> {
-        let mut bytes_buffer: Vec<u8> = question
-            .domain_name
-            .clone()
-            .into_iter()
-            .flat_map(|s| s.into_bytes())
-            .collect();
+    pub fn to_bytes(question: DNSQuestion) -> Vec<u8> {
+        let capacity_heuristic_bound = 500;
+        let mut bytes_buffer = Vec::with_capacity(capacity_heuristic_bound);
 
+        for label in question.domain_labels {
+            bytes_buffer.push((label.len()) as u8);
+            bytes_buffer.extend(label.into_bytes());
+        }
+        bytes_buffer.push(0); //Null terminator (Terminates domain name)
         bytes_buffer.extend(question.question_type.to_be_bytes());
         bytes_buffer.extend(question.question_class.to_be_bytes());
-        bytes_buffer.push(0); //Null terminator
         bytes_buffer
     }
 
     pub fn sequence_to_bytes(question_list: Vec<DNSQuestion>) -> Vec<u8> {
         question_list
-            .iter()
+            .into_iter()
             .flat_map(DNSQuestion::to_bytes)
             .collect()
     }
@@ -163,7 +164,7 @@ impl DNSQuestion {
         println!("DNS Question");
         println!("----------");
         println!("Domain Name");
-        println!("{:?}", question.domain_name);
+        println!("{:?}", question.domain_labels);
         println!("Question type:{}", question.question_type);
         println!("Question class:{}", question.question_class);
         println!("----------");
@@ -178,7 +179,7 @@ impl DNSQuestion {
 
 #[derive(Clone)]
 struct DNSAnswer {
-    domain_name: Vec<String>,
+    domain_labels: Vec<String>,
     answer_type: u16,
     answer_class: u16,
     time_to_live: u32,
@@ -191,7 +192,7 @@ impl DNSAnswer {
         println!("DNS Answer");
         println!("----------");
         println!("Domain Name");
-        println!("{:?}", answer.domain_name);
+        println!("{:?}", answer.domain_labels);
         println!("Answer Type:{}", answer.answer_type);
         println!("Answer Class:{}", answer.answer_class);
         println!("Answer TTL :{} (seconds)", answer.time_to_live);
@@ -243,8 +244,10 @@ impl DnsMessage {
         message_buffer[0..num_header_bytes].copy_from_slice(&header_bytes); //Header fixed at 12 bytes
         message_buffer[num_header_bytes..(num_header_bytes + questions_vec_bytes.len())]
             .copy_from_slice(&questions_vec_bytes);
-        DnsMessage::print_message(message);
-        (message_buffer, header_bytes.len()+questions_vec_bytes.len())
+        (
+            message_buffer,
+            header_bytes.len() + questions_vec_bytes.len(),
+        )
     }
 
     fn build_response_header(dns_query_header: &DnsHeader, qdcount: u16, acount: u16) -> DnsHeader {
