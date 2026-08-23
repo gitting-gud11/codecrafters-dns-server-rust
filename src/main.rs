@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::net::UdpSocket;
+use std::vec;
 
 #[derive(Clone)]
 struct DnsHeader {
@@ -188,15 +189,19 @@ struct DNSAnswer {
 }
 
 impl DNSAnswer {
-    //Might want to modify this at some point
-    pub fn from_bytes(data: &[u8]) -> DNSAnswer {
+    pub fn from_bytes(data: &[u8]) -> Vec<DNSAnswer> {
         let capacity_heuristic_bound = 10;
+        let mut answer_list = Vec::with_capacity(capacity_heuristic_bound);
         let mut found_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
         let mut index = 0;
 
         while index < data.len() {
             let label_length = data[index] as usize;
             if label_length == 0 {
+                if found_domain_labels.is_empty() {
+                    break;
+                }
+                //Might want to add some checks to prevent out of bounds indexing later
                 let data_answer_type = u16::from_be_bytes([data[index + 1], data[index + 2]]);
                 let data_answer_class = u16::from_be_bytes([data[index + 3], data[index + 4]]);
                 let data_ttl = u32::from_be_bytes([
@@ -207,28 +212,23 @@ impl DNSAnswer {
                 ]);
                 let data_length = u16::from_be_bytes([data[index + 9], data[index + 10]]);
                 let data_buffer = data[index + 11..index + 11 + (data_length as usize)].to_vec();
-                return DNSAnswer {
-                    domain_labels: found_domain_labels,
+                answer_list.push(DNSAnswer {
+                    domain_labels: found_domain_labels.clone(),
                     answer_type: data_answer_type,
                     answer_class: data_answer_class,
                     time_to_live: data_ttl,
                     length: data_length,
                     data: data_buffer,
-                };
+                });
+                found_domain_labels.clear();
+                index += 12 + (data_length as usize); //Jump to beginning of next answer
             } else {
                 let label_slice = &data[index + 1..(index + label_length + 1)];
                 found_domain_labels.push(String::from_utf8_lossy(label_slice).to_string());
                 index += label_length + 1; //Jump to beginning of next label
             }
         }
-        DNSAnswer {
-            domain_labels: Vec::new(),
-            answer_type: 0,
-            answer_class: 0,
-            time_to_live: 0,
-            length: 0,
-            data: Vec::new(),
-        } //Received data malformed. Make more robust error handling
+        answer_list
     }
     pub fn to_bytes(answer: &DNSAnswer) -> Vec<u8> {
         let capacity_heuristic_bound = 500;
@@ -245,6 +245,10 @@ impl DNSAnswer {
         bytes_buffer.extend(answer.length.to_be_bytes());
         bytes_buffer.extend_from_slice(&answer.data);
         bytes_buffer
+    }
+
+    pub fn sequence_to_bytes(answer_list: &[DNSAnswer]) -> Vec<u8> {
+        answer_list.iter().flat_map(DNSAnswer::to_bytes).collect()
     }
 
     pub fn print_answer(answer: &DNSAnswer) {
@@ -297,14 +301,19 @@ impl DnsMessage {
         let header_bytes = DnsHeader::to_bytes(&message.header);
         let num_header_bytes = header_bytes.len();
         let questions_vec_bytes = DNSQuestion::sequence_to_bytes(&message.questions);
+        let answers_vec_bytes = DNSAnswer::sequence_to_bytes(&message.answers);
         let mut message_buffer = [0; 512];
-        message_buffer[0..num_header_bytes].copy_from_slice(&header_bytes); //Header fixed at 12 bytes
-        message_buffer[num_header_bytes..(num_header_bytes + questions_vec_bytes.len())]
+        let mut message_index = 0;
+        message_buffer[message_index..message_index + num_header_bytes]
+            .copy_from_slice(&header_bytes); //Header fixed at 12 bytes
+        message_index += num_header_bytes;
+        message_buffer[message_index..message_index + questions_vec_bytes.len()]
             .copy_from_slice(&questions_vec_bytes);
-        (
-            message_buffer,
-            header_bytes.len() + questions_vec_bytes.len(),
-        )
+        message_index += questions_vec_bytes.len();
+        message_buffer[message_index..message_index + answers_vec_bytes.len()]
+            .copy_from_slice(&answers_vec_bytes);
+        message_index += answers_vec_bytes.len();
+        (message_buffer, message_index)
     }
 
     fn build_response_header(dns_query_header: &DnsHeader, acount: u16) -> DnsHeader {
@@ -325,9 +334,21 @@ impl DnsMessage {
         }
     }
 
+    //Hardcoded for now
+    fn build_response_answer() -> Vec<DNSAnswer> {
+        vec![DNSAnswer {
+            domain_labels: vec!["codecrafters".to_string(), "io".to_string()],
+            answer_type: 1,
+            answer_class: 1,
+            time_to_live: 60,
+            length: 4,
+            data: vec![8, 8, 8, 8],
+        }]
+    }
+
     pub fn build_response(dns_query: &DnsMessage) -> DnsMessage {
         let response_questions = dns_query.questions.clone();
-        let response_answers = dns_query.answers.clone(); //Will implement this later
+        let response_answers = DnsMessage::build_response_answer();
         let response_additional = dns_query.additional.clone();
         let response_header =
             DnsMessage::build_response_header(&dns_query.header, response_answers.len() as u16);
