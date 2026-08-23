@@ -110,6 +110,7 @@ struct DNSQuestion {
 }
 
 impl DNSQuestion {
+    //Might want to modify this signature as well
     pub fn from_bytes(data: &[u8; 500]) -> Vec<DNSQuestion> {
         let capacity_heuristic_bound = 10;
         let mut questions_list = Vec::with_capacity(capacity_heuristic_bound);
@@ -144,7 +145,7 @@ impl DNSQuestion {
 
         for label in &question.domain_labels {
             bytes_buffer.push((label.len()) as u8);
-            bytes_buffer.extend(label.as_bytes());
+            bytes_buffer.extend_from_slice(label.as_bytes());
         }
         bytes_buffer.push(0); //Null terminator (Terminates domain name)
         bytes_buffer.extend(question.question_type.to_be_bytes());
@@ -187,11 +188,65 @@ struct DNSAnswer {
 }
 
 impl DNSAnswer {
-    pub fn to_bytes(answer: &DNSAnswer) {
-        let capacity_heuristic_bound = 500;
-        // let mut bytes_buffer = Vec::with_capacity(capacity_heuristic_bound);
-        todo!();
+    //Might want to modify this at some point
+    pub fn from_bytes(data: &[u8]) -> DNSAnswer {
+        let capacity_heuristic_bound = 10;
+        let mut found_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
+        let mut index = 0;
+
+        while index < data.len() {
+            let label_length = data[index] as usize;
+            if label_length == 0 {
+                let data_answer_type = u16::from_be_bytes([data[index + 1], data[index + 2]]);
+                let data_answer_class = u16::from_be_bytes([data[index + 3], data[index + 4]]);
+                let data_ttl = u32::from_be_bytes([
+                    data[index + 5],
+                    data[index + 6],
+                    data[index + 7],
+                    data[index + 8],
+                ]);
+                let data_length = u16::from_be_bytes([data[index + 9], data[index + 10]]);
+                let data_buffer = data[index + 11..index + 11 + (data_length as usize)].to_vec();
+                return DNSAnswer {
+                    domain_labels: found_domain_labels,
+                    answer_type: data_answer_type,
+                    answer_class: data_answer_class,
+                    time_to_live: data_ttl,
+                    length: data_length,
+                    data: data_buffer,
+                };
+            } else {
+                let label_slice = &data[index + 1..(index + label_length + 1)];
+                found_domain_labels.push(String::from_utf8_lossy(label_slice).to_string());
+                index += label_length + 1; //Jump to beginning of next label
+            }
+        }
+        DNSAnswer {
+            domain_labels: Vec::new(),
+            answer_type: 0,
+            answer_class: 0,
+            time_to_live: 0,
+            length: 0,
+            data: Vec::new(),
+        } //Received data malformed. Make more robust error handling
     }
+    pub fn to_bytes(answer: &DNSAnswer) -> Vec<u8> {
+        let capacity_heuristic_bound = 500;
+        let mut bytes_buffer = Vec::with_capacity(capacity_heuristic_bound);
+
+        for label in &answer.domain_labels {
+            bytes_buffer.push((label.len()) as u8);
+            bytes_buffer.extend_from_slice(label.as_bytes());
+        }
+        bytes_buffer.push(0); //Null terminator (Terminates domain name)
+        bytes_buffer.extend(answer.answer_type.to_be_bytes());
+        bytes_buffer.extend(answer.answer_class.to_be_bytes());
+        bytes_buffer.extend(answer.time_to_live.to_be_bytes());
+        bytes_buffer.extend(answer.length.to_be_bytes());
+        bytes_buffer.extend_from_slice(&answer.data);
+        bytes_buffer
+    }
+
     pub fn print_answer(answer: &DNSAnswer) {
         println!("DNS Answer");
         println!("----------");
