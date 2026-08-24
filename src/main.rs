@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use std::net::UdpSocket;
-use std::vec;
+use std::{fs::read_to_string, io::Read, vec};
 
 #[derive(Clone)]
 struct DnsHeader {
@@ -111,16 +111,28 @@ struct DNSQuestion {
 }
 
 impl DNSQuestion {
-    //Might want to modify this signature as well
+
     pub fn from_bytes(data: &[u8; 500]) -> Vec<DNSQuestion> {
         let capacity_heuristic_bound = 10;
         let mut questions_list = Vec::with_capacity(capacity_heuristic_bound);
         let mut current_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
         let mut index = 0;
+        let mut temp = false;
 
         while index < data.len() {
             let label_length = data[index] as usize;
-            if label_length == 0 {
+            //Index denotes the beginning of a pointer
+            if data[index] >> 6 == 0x3 {
+                temp = true;
+                println!("Label is a pointer");
+                let offset_position = (data[index] & 0x3F) as usize;
+                println!("Offset position {}",offset_position);
+                let offset_length = data[offset_position] as usize;
+                let offset_slice =
+                    &data[&offset_position + 1..(offset_position + offset_length + 1)];
+                current_domain_labels.push(String::from_utf8_lossy(offset_slice).to_string());
+                index += 2; //Jump to beginning of next label
+            } else if label_length == 0 {
                 if current_domain_labels.is_empty() {
                     break;
                 }
@@ -136,6 +148,9 @@ impl DNSQuestion {
                 current_domain_labels.push(String::from_utf8_lossy(label_slice).to_string());
                 index += label_length + 1; //Jump to beginning of next label
             }
+        }
+        if temp {
+            DNSQuestion::print_questions_sequence(&questions_list);
         }
         questions_list
     }
