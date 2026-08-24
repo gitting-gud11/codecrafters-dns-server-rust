@@ -326,7 +326,11 @@ impl DnsMessage {
             recursion_is_desired: dns_query_header.recursion_is_desired,
             recursion_is_available: false, //Recursion not currently supported
             reserved: dns_query_header.reserved,
-            response_code: if dns_query_header.operation_code==0 {0} else {4}, //Only standard query currently supported
+            response_code: if dns_query_header.operation_code == 0 {
+                0
+            } else {
+                4
+            }, //Only standard query currently supported
             question_count: dns_query_header.question_count,
             answer_record_count: acount,
             authority_record_count: dns_query_header.authority_record_count, //Look into modifying these
@@ -335,20 +339,23 @@ impl DnsMessage {
     }
 
     //Hardcoded for now
-    fn build_response_answer() -> Vec<DNSAnswer> {
-        vec![DNSAnswer {
-            domain_labels: vec!["codecrafters".to_string(), "io".to_string()],
-            answer_type: 1,
-            answer_class: 1,
-            time_to_live: 60,
-            length: 4,
-            data: vec![8, 8, 8, 8],
-        }]
+    fn build_response_answer(question_list: &[DNSQuestion]) -> Vec<DNSAnswer> {
+        question_list
+            .iter()
+            .map(|question| DNSAnswer {
+                domain_labels: question.domain_labels.clone(),
+                answer_type: 1,
+                answer_class: 1,
+                time_to_live: 60,
+                length: 4,
+                data: vec![8, 8, 8, 8],
+            })
+            .collect()
     }
 
     pub fn build_response(dns_query: &DnsMessage) -> DnsMessage {
         let response_questions = dns_query.questions.clone();
-        let response_answers = DnsMessage::build_response_answer();
+        let response_answers = DnsMessage::build_response_answer(&response_questions);
         let response_additional = dns_query.additional.clone();
         let response_header =
             DnsMessage::build_response_header(&dns_query.header, response_answers.len() as u16);
