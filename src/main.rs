@@ -1,6 +1,9 @@
 #[allow(unused_imports)]
 use std::net::UdpSocket;
-use std::{collections::HashSet, vec};
+use std::{
+    collections::{HashMap, HashSet},
+    vec,
+};
 
 //"Bound" on the number of labels in domain and the length of the question and answer list
 //Aims to minimize reallocations during deserialization
@@ -190,6 +193,51 @@ impl DNSQuestion {
             .collect()
     }
 
+    pub fn sequence_to_compressed_bytes(question_list: &[DNSQuestion]) -> Vec<u8> {
+        let mut bytes_buffer = Vec::with_capacity(DATAGRAM_HEADER_MAX_SIZE);
+        let mut labels_map: HashMap<String, u16> = HashMap::with_capacity(CAPACITY_HEURISTIC_BOUND);
+        let mut datagram_position = DATAGRAM_HEADER_BYTE_COUNT as u16; //Relative to the entire encoded datagram
+        // let mut last_octet_is_pointer = false;
+
+
+        for question in question_list {
+            let mut last_octet_is_pointer = false;
+            for i in 0 ..question.domain_labels.len() {
+                let label = &question.domain_labels[i];
+                if let Some(label_index) = labels_map.get(label) {
+                    println!("Found an index:{} with label:{}", label_index, label);
+                    let label_pointer = 0xC000 | label_index;
+                    bytes_buffer.extend(label_pointer.to_be_bytes());
+                    datagram_position += 2; //size of u16
+                    last_octet_is_pointer = true;
+                } else {
+                    bytes_buffer.push((label.len()) as u8);
+                    bytes_buffer.extend_from_slice(label.as_bytes());
+                    labels_map.insert(label.clone(), datagram_position);
+                    datagram_position += label.len() as u16;
+                    last_octet_is_pointer = false;
+                }
+
+
+            }
+
+            // if !last_octet_is_pointer || (i==question.domain_labels.len()-1) {
+            //     bytes_buffer.push(0);
+            //     bytes_buffer.extend(question.question_type.to_be_bytes());
+            //     bytes_buffer.extend(question.question_class.to_be_bytes());
+            // }
+        }
+
+        // if last_octet_is_pointer{
+        //         bytes_buffer.push(0);
+        //         bytes_buffer.extend(question.question_type.to_be_bytes());
+        //         bytes_buffer.extend(question.question_class.to_be_bytes());
+
+        // }
+
+        bytes_buffer
+    }
+
     pub fn print_question(question: &DNSQuestion) {
         println!("DNS Question");
         println!("----------");
@@ -323,7 +371,7 @@ impl DnsMessage {
     pub fn to_bytes(message: &DnsMessage) -> ([u8; 512], usize) {
         let header_bytes = DnsHeader::to_bytes(&message.header);
         let num_header_bytes = header_bytes.len();
-        let questions_vec_bytes = DNSQuestion::sequence_to_bytes(&message.questions);
+        let questions_vec_bytes = DNSQuestion::sequence_to_compressed_bytes(&message.questions);
         let answers_vec_bytes = DNSAnswer::sequence_to_bytes(&message.answers);
         let mut message_buffer = [0; 512];
         let mut message_index = 0;
