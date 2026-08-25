@@ -5,7 +5,7 @@ use std::{
     vec,
 };
 
-//"Bound" on the number of labels in domain and the length of the question and answer list
+//"Bound" on the number of labels in domain
 //Aims to minimize reallocations during deserialization
 const CAPACITY_HEURISTIC_BOUND: usize = 10;
 
@@ -123,18 +123,19 @@ struct DNSQuestion {
 
 impl DNSQuestion {
     pub fn from_bytes(data: &[u8; 512]) -> Vec<DNSQuestion> {
-        let mut questions_list = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
+        let question_count = u16::from_be_bytes([data[4], data[5]]) as usize;
+        let mut questions_list = Vec::with_capacity(question_count);
         let mut current_domain_labels = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
         let mut label_pointer_stack = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
         let mut label_pointer_set = HashSet::with_capacity(CAPACITY_HEURISTIC_BOUND);
         let mut index = DATAGRAM_HEADER_BYTE_COUNT;
 
-        while index < data.len() {
+        while questions_list.len() < question_count && index < data.len() {
             let label_octet = data[index] as usize;
             let label_is_pointer = data[index] >> 6 == 0x3; //Check if pointer bits are set
             if label_octet == 0 {
                 if current_domain_labels.is_empty() {
-                    return questions_list; //Null terminator read
+                    return questions_list; //Null terminator read (indicates malformed section might want error handling?)
                 } else if label_pointer_stack.is_empty() {
                     questions_list.push(DNSQuestion {
                         domain_labels: current_domain_labels.clone(),
@@ -197,44 +198,34 @@ impl DNSQuestion {
         let mut bytes_buffer = Vec::with_capacity(DATAGRAM_HEADER_MAX_SIZE);
         let mut labels_map: HashMap<String, u16> = HashMap::with_capacity(CAPACITY_HEURISTIC_BOUND);
         let mut datagram_position = DATAGRAM_HEADER_BYTE_COUNT as u16; //Relative to the entire encoded datagram
-        // let mut last_octet_is_pointer = false;
-
-
+        let mut found = false;
         for question in question_list {
-            let mut last_octet_is_pointer = false;
-            for i in 0 ..question.domain_labels.len() {
+            for i in 0..question.domain_labels.len() {
                 let label = &question.domain_labels[i];
                 if let Some(label_index) = labels_map.get(label) {
+                    found = true;
                     println!("Found an index:{} with label:{}", label_index, label);
                     let label_pointer = 0xC000 | label_index;
                     bytes_buffer.extend(label_pointer.to_be_bytes());
                     datagram_position += 2; //size of u16
-                    last_octet_is_pointer = true;
                 } else {
                     bytes_buffer.push((label.len()) as u8);
                     bytes_buffer.extend_from_slice(label.as_bytes());
                     labels_map.insert(label.clone(), datagram_position);
                     datagram_position += label.len() as u16;
-                    last_octet_is_pointer = false;
                 }
-
-
             }
-
-            // if !last_octet_is_pointer || (i==question.domain_labels.len()-1) {
-            //     bytes_buffer.push(0);
-            //     bytes_buffer.extend(question.question_type.to_be_bytes());
-            //     bytes_buffer.extend(question.question_class.to_be_bytes());
-            // }
+            bytes_buffer.push(0);
+            bytes_buffer.extend(question.question_type.to_be_bytes());
+            bytes_buffer.extend(question.question_class.to_be_bytes());
         }
 
-        // if last_octet_is_pointer{
-        //         bytes_buffer.push(0);
-        //         bytes_buffer.extend(question.question_type.to_be_bytes());
-        //         bytes_buffer.extend(question.question_class.to_be_bytes());
-
-        // }
-
+        if (found) {
+            println!("Compressed Version");
+            println!("{:?}", bytes_buffer); //Trailing suffix portion differs
+            println!("Uncompressed Version");
+            println!("{:?}", DNSQuestion::sequence_to_bytes(question_list));
+        }
         bytes_buffer
     }
 
