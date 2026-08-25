@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use std::net::UdpSocket;
-use std::{fs::read_to_string, io::Read, vec};
+use std::{collections::HashSet, fs::read_to_string, io::Read, vec};
 
 #[derive(Clone)]
 struct DnsHeader {
@@ -111,48 +111,109 @@ struct DNSQuestion {
 }
 
 impl DNSQuestion {
-
     pub fn from_bytes(data: &[u8; 500]) -> Vec<DNSQuestion> {
         let capacity_heuristic_bound = 10;
-        let mut questions_list = Vec::with_capacity(capacity_heuristic_bound);
-        let mut current_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
+        let mut questions_list=Vec::with_capacity(capacity_heuristic_bound);
+        let mut current_domain_labels=Vec::with_capacity(capacity_heuristic_bound);
+        let mut label_pointer_stack=Vec::with_capacity(capacity_heuristic_bound);
+        let mut label_pointer_set=HashSet::with_capacity(capacity_heuristic_bound);
         let mut index = 0;
-        let mut temp = false;
 
-        while index < data.len() {
+        while index < data.len(){
             let label_length = data[index] as usize;
-            //Index denotes the beginning of a pointer
-            if data[index] >> 6 == 0x3 {
-                temp = true;
-                println!("Label is a pointer");
-                let offset_position = (data[index] & 0x3F) as usize;
-                println!("Offset position {}",offset_position);
-                let offset_length = data[offset_position] as usize;
-                let offset_slice =
-                    &data[&offset_position + 1..(offset_position + offset_length + 1)];
-                current_domain_labels.push(String::from_utf8_lossy(offset_slice).to_string());
-                index += 2; //Jump to beginning of next label
-            } else if label_length == 0 {
-                if current_domain_labels.is_empty() {
-                    break;
+            let label_is_pointer = data[index] >> 6 == 0x3; //Check if pointer bits are set
+            if label_length == 0{
+                if current_domain_labels.is_empty(){
+                    break; //Null terminator read
                 }
+                else if label_pointer_set.is_empty(){
                 questions_list.push(DNSQuestion {
                     domain_labels: current_domain_labels.clone(),
                     question_type: u16::from_be_bytes([data[index + 1], data[index + 2]]),
                     question_class: u16::from_be_bytes([data[index + 3], data[index + 4]]),
                 });
-                current_domain_labels.clear();
-                index += 5; //Jump to beginning of next label
-            } else {
-                let label_slice = &data[index + 1..(index + label_length + 1)];
-                current_domain_labels.push(String::from_utf8_lossy(label_slice).to_string());
-                index += label_length + 1; //Jump to beginning of next label
+                    label_pointer_set.clear();
+                    current_domain_labels.clear();
+                    index+=5; //Jump to beginning of next label
+                }
+                else{
+                    let previous_pointer_label=label_pointer_stack.last().expect("A pointer exists in the label stack");
+                    index= *previous_pointer_label;
+                    label_pointer_stack.pop();
+
+                }
+                continue;
             }
-        }
-        if temp {
-            DNSQuestion::print_questions_sequence(&questions_list);
+
+            //Cycle encountered
+            if(label_pointer_set.contains(&index)){
+                break; //Might want to add some explicit error handling
+            }
+
+            if label_is_pointer{
+                let offset_position=u16::from_be_bytes([data[index] & 0x3F,data[index+1]]) as usize;
+                label_pointer_stack.push(index);
+                label_pointer_set.insert(index);
+
+            }
+            else{
+                let label_slice=&data[index + 1 .. (index+label_length +1)];
+                current_domain_labels.push(String::from_utf8_lossy(label_slice).to_string());
+                index+= label_length +1; //Jump to beginning of next label
+            }
+            // else if label_is_pointer{
+
+            // }
+            // else{
+
+            // }
         }
         questions_list
+        // let capacity_heuristic_bound = 10;
+        // let mut questions_list = Vec::with_capacity(capacity_heuristic_bound);
+        // let mut current_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
+        // let mut index = 0;
+        // let mut temp = false;
+
+        // while index < data.len() {
+        //     let label_length = data[index] as usize;
+        //     let label_is_pointer = data[index] >> 6 == 0x3;
+        //     if label_length != 0 && !label_is_pointer {
+        //         let label_slice = &data[index + 1..(index + label_length + 1)];
+        //         current_domain_labels.push(String::from_utf8_lossy(label_slice).to_string());
+        //         index += label_length + 1; //Jump to beginning of next label
+        //     } else {
+        //         if label_is_pointer {
+        //             temp=true;
+        //             //Need to revise handling of compression
+        //             let offset_position=u16::from_be_bytes([data[index] & 0x3F,data[index+1]]) as usize;
+        //             let offset_length=data[offset_position] as usize; //Out of bounds error. This is incorrect instead need to fetch prior entry
+        //             // let offset_position = (data[index] & 0x3F) as usize;
+        //             // let offset_length =
+        //             //     u16::from_be_bytes([data[index] & 0x3F, data[index + 1]]) as usize;
+        //             let offset_slice =
+        //                 &data[&offset_position + 1..(offset_position + offset_length + 1)];
+        //             current_domain_labels.push(String::from_utf8_lossy(offset_slice).to_string()); //Pointer terminates sequence
+        //             index += 2; //Jump to type and class segment
+        //         }
+
+        //         if current_domain_labels.is_empty() {
+        //             break;
+        //         }
+
+        //         questions_list.push(DNSQuestion {
+        //             domain_labels: current_domain_labels.clone(),
+        //             question_type: u16::from_be_bytes([data[index + 1], data[index + 2]]),
+        //             question_class: u16::from_be_bytes([data[index + 3], data[index + 4]]),
+        //         });
+        //         current_domain_labels.clear();
+        //         index += 5; //Jump to beginning of next label
+        //     }
+        // }
+        // if temp {
+        //     DNSQuestion::print_questions_sequence(&questions_list);
+        // }
+        // questions_list
     }
 
     pub fn to_bytes(question: &DNSQuestion) -> Vec<u8> {
