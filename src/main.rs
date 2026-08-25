@@ -198,33 +198,32 @@ impl DNSQuestion {
         let mut bytes_buffer = Vec::with_capacity(DATAGRAM_HEADER_MAX_SIZE);
         let mut labels_map: HashMap<String, u16> = HashMap::with_capacity(CAPACITY_HEURISTIC_BOUND);
         let mut datagram_position = DATAGRAM_HEADER_BYTE_COUNT as u16; //Relative to the entire encoded datagram
-        let mut found = false;
         for question in question_list {
-            for i in 0..question.domain_labels.len() {
-                let label = &question.domain_labels[i];
+            let mut last_index_is_label = true;
+
+            for label in &question.domain_labels {
                 if let Some(label_index) = labels_map.get(label) {
-                    found = true;
-                    println!("Found an index:{} with label:{}", label_index, label);
                     let label_pointer = 0xC000 | label_index;
                     bytes_buffer.extend(label_pointer.to_be_bytes());
                     datagram_position += 2; //size of u16
+                    last_index_is_label = false; //label pointer terminates the question
+                    break;
                 } else {
-                    bytes_buffer.push((label.len()) as u8);
+                    bytes_buffer.push(label.len() as u8);
                     bytes_buffer.extend_from_slice(label.as_bytes());
                     labels_map.insert(label.clone(), datagram_position);
-                    datagram_position += label.len() as u16;
+                    datagram_position += (label.len() + 1) as u16; //Include the byte for storing the length
                 }
             }
-            bytes_buffer.push(0);
+
+            //Last index is a label
+            if last_index_is_label {
+                bytes_buffer.push(0); //Null terminator (Terminates domain name)
+                datagram_position += 1;
+            }
             bytes_buffer.extend(question.question_type.to_be_bytes());
             bytes_buffer.extend(question.question_class.to_be_bytes());
-        }
-
-        if (found) {
-            println!("Compressed Version");
-            println!("{:?}", bytes_buffer); //Trailing suffix portion differs
-            println!("Uncompressed Version");
-            println!("{:?}", DNSQuestion::sequence_to_bytes(question_list));
+            datagram_position += 4;
         }
         bytes_buffer
     }
