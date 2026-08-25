@@ -1,6 +1,14 @@
 #[allow(unused_imports)]
 use std::net::UdpSocket;
-use std::{collections::HashSet, fs::read_to_string, io::Read, vec};
+use std::{collections::HashSet, vec};
+
+//"Bound" on the number of labels in domain and the length of the question and answer list
+//Aims to minimize reallocations during deserialization
+const CAPACITY_HEURISTIC_BOUND: usize = 10;
+
+const DATAGRAM_HEADER_BYTE_COUNT: usize = 12;
+
+const DATAGRAM_HEADER_MAX_SIZE: usize = 512;
 
 #[derive(Clone)]
 struct DnsHeader {
@@ -112,22 +120,17 @@ struct DNSQuestion {
 
 impl DNSQuestion {
     pub fn from_bytes(data: &[u8; 512]) -> Vec<DNSQuestion> {
-        let capacity_heuristic_bound = 10;
-        let header_offset= 12; //first 12 bytes reserved for the header
-        let mut questions_list = Vec::with_capacity(capacity_heuristic_bound);
-        let mut current_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
-        let mut label_pointer_stack = Vec::with_capacity(capacity_heuristic_bound);
-        let mut label_pointer_set = HashSet::with_capacity(capacity_heuristic_bound);
-        let mut index = header_offset;
+        let mut questions_list = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
+        let mut current_domain_labels = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
+        let mut label_pointer_stack = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
+        let mut label_pointer_set = HashSet::with_capacity(CAPACITY_HEURISTIC_BOUND);
+        let mut index = DATAGRAM_HEADER_BYTE_COUNT;
 
         while index < data.len() {
-            let label_length = data[index] as usize;
+            let label_octet = data[index] as usize;
             let label_is_pointer = data[index] >> 6 == 0x3; //Check if pointer bits are set
-            println!("Index:{}  Label_pointer_stack:{:?} current_domain_labels:{:?}",index,label_pointer_stack,current_domain_labels);
-            if label_length == 0 {
+            if label_octet == 0 {
                 if current_domain_labels.is_empty() {
-                    println!("Exited from current_domain_labels conditional");
-                    DNSQuestion::print_questions_sequence(&questions_list);
                     return questions_list; //Null terminator read
                 } else if label_pointer_stack.is_empty() {
                     questions_list.push(DNSQuestion {
@@ -155,24 +158,20 @@ impl DNSQuestion {
             if label_is_pointer {
                 let offset_position =
                     u16::from_be_bytes([data[index] & 0x3F, data[index + 1]]) as usize;
-                println!("Calculated offset position is:{} and {:X}(hex)",offset_position,offset_position);
                 label_pointer_stack.push(index);
                 label_pointer_set.insert(index);
                 index = offset_position;
             } else {
-                let label_slice = &data[index + 1..(index + label_length + 1)];
+                let label_slice = &data[index + 1..(index + label_octet + 1)];
                 current_domain_labels.push(String::from_utf8_lossy(label_slice).to_string());
-                index += label_length + 1; //Jump to beginning of next label
+                index += label_octet + 1; //Jump to beginning of next label
             }
         }
-        println!("Exited while loop");
-        DNSQuestion::print_questions_sequence(&questions_list);
         questions_list
     }
 
     pub fn to_bytes(question: &DNSQuestion) -> Vec<u8> {
-        let capacity_heuristic_bound = 500;
-        let mut bytes_buffer = Vec::with_capacity(capacity_heuristic_bound);
+        let mut bytes_buffer = Vec::with_capacity(DATAGRAM_HEADER_MAX_SIZE);
 
         for label in &question.domain_labels {
             bytes_buffer.push((label.len()) as u8);
@@ -220,9 +219,8 @@ struct DNSAnswer {
 
 impl DNSAnswer {
     pub fn from_bytes(data: &[u8]) -> Vec<DNSAnswer> {
-        let capacity_heuristic_bound = 10;
-        let mut answer_list = Vec::with_capacity(capacity_heuristic_bound);
-        let mut found_domain_labels = Vec::with_capacity(capacity_heuristic_bound);
+        let mut answer_list = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
+        let mut found_domain_labels = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
         let mut index = 0;
 
         while index < data.len() {
@@ -261,8 +259,7 @@ impl DNSAnswer {
         answer_list
     }
     pub fn to_bytes(answer: &DNSAnswer) -> Vec<u8> {
-        let capacity_heuristic_bound = 500;
-        let mut bytes_buffer = Vec::with_capacity(capacity_heuristic_bound);
+        let mut bytes_buffer = Vec::with_capacity(DATAGRAM_HEADER_MAX_SIZE);
 
         for label in &answer.domain_labels {
             bytes_buffer.push((label.len()) as u8);
@@ -311,13 +308,9 @@ struct DnsMessage {
 }
 
 impl DnsMessage {
+    //might want to specify from query_bytes?
     pub fn from_bytes(data: &[u8; 512]) -> DnsMessage {
-        let data_header: [u8; 12] = data[0..12]
-            .try_into()
-            .expect("query has 12 bytes for a header");
-        let data_question: [u8; 500] = data[12..]
-            .try_into()
-            .expect("query has 500 bytes for question");
+        let data_header: [u8; 12] = data[0..12].try_into().unwrap();
         let dns_header = DnsHeader::from_bytes(&data_header);
         DnsMessage {
             header: dns_header,
