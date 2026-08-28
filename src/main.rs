@@ -124,7 +124,7 @@ struct DNSQuestion {
 }
 
 impl DNSQuestion {
-    pub fn from_bytes(data: &[u8; 512]) -> Vec<DNSQuestion> {
+    pub fn from_bytes(data: &[u8; 512]) -> (Vec<DNSQuestion>, usize) {
         let question_count = u16::from_be_bytes([data[4], data[5]]) as usize;
         let mut questions_list = Vec::with_capacity(question_count);
         let mut current_domain_labels = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
@@ -137,7 +137,7 @@ impl DNSQuestion {
             let label_is_pointer = data[index] >> 6 == 0x3; //Check if pointer bits are set
             if label_octet == 0 {
                 if current_domain_labels.is_empty() {
-                    return questions_list; //Null terminator read (indicates malformed section might want error handling?)
+                    return (questions_list, index + 1 - 12); //Null terminator read (indicates malformed section might want error handling?)
                 } else if label_pointer_stack.is_empty() {
                     questions_list.push(DNSQuestion {
                         domain_labels: current_domain_labels.clone(),
@@ -173,7 +173,8 @@ impl DNSQuestion {
                 index += label_octet + 1; //Jump to beginning of next label
             }
         }
-        questions_list
+        let bytes_consumed= if  question_count==0 {0} else {index+1-12};
+        (questions_list, bytes_consumed)
     }
 
     pub fn to_bytes(question: &DNSQuestion) -> Vec<u8> {
@@ -258,7 +259,7 @@ struct DNSAnswer {
 }
 
 impl DNSAnswer {
-    pub fn from_bytes(data: &[u8]) -> Vec<DNSAnswer> {
+    pub fn from_bytes(data: &[u8]) -> (Vec<DNSAnswer>, usize) {
         let mut answer_list = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
         let mut found_domain_labels = Vec::with_capacity(CAPACITY_HEURISTIC_BOUND);
         let mut index = 0;
@@ -296,7 +297,8 @@ impl DNSAnswer {
                 index += label_length + 1; //Jump to beginning of next label
             }
         }
-        answer_list
+        let bytes_consumed= if data.is_empty()  {0} else {index+1};
+        (answer_list,bytes_consumed)
     }
     pub fn to_bytes(answer: &DNSAnswer) -> Vec<u8> {
         let mut bytes_buffer = Vec::with_capacity(DATAGRAM_HEADER_MAX_SIZE);
@@ -350,16 +352,16 @@ struct DnsMessage {
 impl DnsMessage {
     //might want to specify from query_bytes?
     // pub fn from_bytes
-    pub fn from_bytes(data: &[u8;512]) -> DnsMessage{
-        let data_header: [u8;12] = data[0..12].try_into().unwrap();
-        let dns_header = DnsHeader
-    }
+    // pub fn from_bytes(data: &[u8;512]) -> DnsMessage{
+    //     let data_header: [u8;12] = data[0..12].try_into().unwrap();
+    //     let dns_header = DnsHeader
+    // }
     pub fn query_from_bytes(data: &[u8; 512]) -> DnsMessage {
         let data_header: [u8; 12] = data[0..12].try_into().unwrap();
         let dns_header = DnsHeader::from_bytes(&data_header);
         DnsMessage {
             header: dns_header,
-            questions: (DNSQuestion::from_bytes(data)),
+            questions: (DNSQuestion::from_bytes(data)).0,
             answers: Vec::new(),
             additional: Vec::new(),
         }
@@ -440,7 +442,7 @@ impl DnsMessage {
 
     fn transmit_forwarding_message(
         fwd_message: &[u8],
-        udp_socket: UdpSocket,
+        udp_socket: &UdpSocket,
         forwarding_address: &str,
     ) {
         let fwd_bytes = fwd_message.len();
@@ -459,7 +461,6 @@ impl DnsMessage {
         }
     }
 
-    //Hardcoded for now
     fn build_response_answer(
         dns_query_header: &DnsHeader,
         question_list: &[DNSQuestion],
@@ -471,13 +472,13 @@ impl DnsMessage {
             .map(|question| DnsMessage::construct_forwarding_message(question, dns_query_header))
             .collect();
 
-        let mut received_messages = Vec::with_capacity(question_list.len());
+        let mut received_messages: Vec<u8> = Vec::with_capacity(question_list.len());
         let mut buf = [0; 512];
 
         for (fwd_message, fwd_bytes) in forwarding_messages {
             DnsMessage::transmit_forwarding_message(
                 &fwd_message[0..fwd_bytes],
-                udp_socket,
+                &udp_socket,
                 forwarding_address,
             );
         }
@@ -488,35 +489,40 @@ impl DnsMessage {
                     if source.ip().to_string() != forwarding_address {
                         continue;
                     }
-
                 }
                 Err(e) => {
                     eprintln!(
-                        "Error attempting to receive data from forwarding server: {}",e);
+                        "Error attempting to receive data from forwarding server: {}",
+                        e
+                    );
                 }
             }
         }
         todo!();
-        // question_list
-        //     .iter()
-        //     .map(|question| DNSAnswer {
-        //         domain_labels: question.domain_labels.clone(),
-        //         answer_type: 1,
-        //         answer_class: 1,
-        //         time_to_live: 60,
-        //         length: 4,
-        //         data: vec![8, 8, 8, 8],
-        //     })
-        //     .collect()
+    }
+
+    fn build_response_answer_hardcode(question_list: &[DNSQuestion]) -> Vec<DNSAnswer> {
+        question_list
+            .iter()
+            .map(|question| DNSAnswer {
+                domain_labels: question.domain_labels.clone(),
+                answer_type: 1,
+                answer_class: 1,
+                time_to_live: 60,
+                length: 4,
+                data: vec![8, 8, 8, 8],
+            })
+            .collect()
     }
 
     pub fn build_response(dns_query: &DnsMessage, forwarding_address: &str) -> DnsMessage {
         let response_questions = dns_query.questions.clone();
-        let response_answers = DnsMessage::build_response_answer(
-            &dns_query.header,
-            &response_questions,
-            forwarding_address,
-        );
+        let response_answers = DnsMessage::build_response_answer_hardcode(&response_questions);
+        // let response_answers = DnsMessage::build_response_answer(
+        //     &dns_query.header,
+        //     &response_questions,
+        //     forwarding_address,
+        // );
         let response_additional = dns_query.additional.clone();
         let response_header =
             DnsMessage::build_response_header(&dns_query.header, response_answers.len() as u16);
