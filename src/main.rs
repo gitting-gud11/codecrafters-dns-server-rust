@@ -2,7 +2,7 @@
 use std::net::UdpSocket;
 use std::{
     collections::{HashMap, HashSet},
-    vec,
+    env, vec,
 };
 
 //"Bound" on the number of labels in domain
@@ -12,6 +12,8 @@ const CAPACITY_HEURISTIC_BOUND: usize = 10;
 const DATAGRAM_HEADER_BYTE_COUNT: usize = 12;
 
 const DATAGRAM_HEADER_MAX_SIZE: usize = 512;
+
+const MAX_TRANSMISSION_ATTEMPTS: usize = 10;
 
 #[derive(Clone)]
 struct DnsHeader {
@@ -347,7 +349,12 @@ struct DnsMessage {
 
 impl DnsMessage {
     //might want to specify from query_bytes?
-    pub fn from_bytes(data: &[u8; 512]) -> DnsMessage {
+    // pub fn from_bytes
+    pub fn from_bytes(data: &[u8;512]) -> DnsMessage{
+        let data_header: [u8;12] = data[0..12].try_into().unwrap();
+        let dns_header = DnsHeader
+    }
+    pub fn query_from_bytes(data: &[u8; 512]) -> DnsMessage {
         let data_header: [u8; 12] = data[0..12].try_into().unwrap();
         let dns_header = DnsHeader::from_bytes(&data_header);
         DnsMessage {
@@ -377,6 +384,38 @@ impl DnsMessage {
         (message_buffer, message_index)
     }
 
+    fn build_forwarding_header(dns_query_header: &DnsHeader) -> DnsHeader {
+        DnsHeader {
+            packet_identifer: dns_query_header.packet_identifer,
+            is_reply_packet: false,
+            operation_code: dns_query_header.operation_code,
+            is_authoritative: false,
+            is_truncated: dns_query_header.is_truncated,
+            recursion_is_desired: dns_query_header.recursion_is_desired,
+            recursion_is_available: false,
+            reserved: dns_query_header.reserved,
+            response_code: 0,
+            question_count: 1,
+            answer_record_count: 0,
+            authority_record_count: 0,
+            additional_record_count: dns_query_header.additional_record_count,
+        }
+    }
+
+    fn construct_forwarding_message(
+        question: &DNSQuestion,
+        dns_query_header: &DnsHeader,
+    ) -> ([u8; 512], usize) {
+        let forwarding_header = DnsMessage::build_forwarding_header(dns_query_header);
+        let forwarding_message = DnsMessage {
+            header: forwarding_header,
+            questions: vec![question.clone()],
+            answers: Vec::new(),
+            additional: Vec::new(),
+        };
+        DnsMessage::to_bytes(&forwarding_message)
+    }
+
     fn build_response_header(dns_query_header: &DnsHeader, acount: u16) -> DnsHeader {
         DnsHeader {
             packet_identifer: dns_query_header.packet_identifer,
@@ -399,24 +438,85 @@ impl DnsMessage {
         }
     }
 
-    //Hardcoded for now
-    fn build_response_answer(question_list: &[DNSQuestion]) -> Vec<DNSAnswer> {
-        question_list
-            .iter()
-            .map(|question| DNSAnswer {
-                domain_labels: question.domain_labels.clone(),
-                answer_type: 1,
-                answer_class: 1,
-                time_to_live: 60,
-                length: 4,
-                data: vec![8, 8, 8, 8],
-            })
-            .collect()
+    fn transmit_forwarding_message(
+        fwd_message: &[u8],
+        udp_socket: UdpSocket,
+        forwarding_address: &str,
+    ) {
+        let fwd_bytes = fwd_message.len();
+        for _ in 0..MAX_TRANSMISSION_ATTEMPTS {
+            match udp_socket.send_to(fwd_message, forwarding_address) {
+                Ok(sent_bytes) => {
+                    if sent_bytes == fwd_bytes {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error transmitting forwarding data: {}", e);
+                    break;
+                }
+            }
+        }
     }
 
-    pub fn build_response(dns_query: &DnsMessage) -> DnsMessage {
+    //Hardcoded for now
+    fn build_response_answer(
+        dns_query_header: &DnsHeader,
+        question_list: &[DNSQuestion],
+        forwarding_address: &str,
+    ) -> Vec<DNSAnswer> {
+        let udp_socket = UdpSocket::bind("127.0.0.1:2053").expect("Failed to bind to address");
+        let forwarding_messages: Vec<([u8; 512], usize)> = question_list
+            .iter()
+            .map(|question| DnsMessage::construct_forwarding_message(question, dns_query_header))
+            .collect();
+
+        let mut received_messages = Vec::with_capacity(question_list.len());
+        let mut buf = [0; 512];
+
+        for (fwd_message, fwd_bytes) in forwarding_messages {
+            DnsMessage::transmit_forwarding_message(
+                &fwd_message[0..fwd_bytes],
+                udp_socket,
+                forwarding_address,
+            );
+        }
+        for _ in 0..question_list.len() {
+            match udp_socket.recv_from(&mut buf) {
+                Ok((size, source)) => {
+                    //Want to verify the source
+                    if source.ip().to_string() != forwarding_address {
+                        continue;
+                    }
+
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Error attempting to receive data from forwarding server: {}",e);
+                }
+            }
+        }
+        todo!();
+        // question_list
+        //     .iter()
+        //     .map(|question| DNSAnswer {
+        //         domain_labels: question.domain_labels.clone(),
+        //         answer_type: 1,
+        //         answer_class: 1,
+        //         time_to_live: 60,
+        //         length: 4,
+        //         data: vec![8, 8, 8, 8],
+        //     })
+        //     .collect()
+    }
+
+    pub fn build_response(dns_query: &DnsMessage, forwarding_address: &str) -> DnsMessage {
         let response_questions = dns_query.questions.clone();
-        let response_answers = DnsMessage::build_response_answer(&response_questions);
+        let response_answers = DnsMessage::build_response_answer(
+            &dns_query.header,
+            &response_questions,
+            forwarding_address,
+        );
         let response_additional = dns_query.additional.clone();
         let response_header =
             DnsMessage::build_response_header(&dns_query.header, response_answers.len() as u16);
@@ -428,9 +528,13 @@ impl DnsMessage {
         }
     }
 
-    pub fn response_to_query_bytes(query: &[u8; 512]) -> ([u8; 512], usize) {
-        let dns_query_message = DnsMessage::from_bytes(query);
-        let dns_response_message = DnsMessage::build_response(&dns_query_message);
+    pub fn response_to_query_bytes(
+        query: &[u8; 512],
+        forwarding_address: &str,
+    ) -> ([u8; 512], usize) {
+        let dns_query_message = DnsMessage::query_from_bytes(query);
+        let dns_response_message =
+            DnsMessage::build_response(&dns_query_message, forwarding_address);
         DnsMessage::to_bytes(&dns_response_message)
     }
 
@@ -458,12 +562,24 @@ fn main() {
     let udp_socket = UdpSocket::bind("127.0.0.1:2053").expect("Failed to bind to address");
     let mut buf = [0; 512];
 
+    let command_arguments: Vec<String> = env::args().collect();
+
+    let forwarding_server =
+        if command_arguments.len() > 1 && command_arguments[1].as_str() == "--resolver" {
+            command_arguments
+                .get(2)
+                .map(String::as_str)
+                .unwrap_or("1.1.1.1")
+        } else {
+            "1.1.1.1"
+        };
+
     loop {
         match udp_socket.recv_from(&mut buf) {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
                 let (response_buffer, num_encoded_bytes) =
-                    DnsMessage::response_to_query_bytes(&buf);
+                    DnsMessage::response_to_query_bytes(&buf, forwarding_server);
                 let response = &response_buffer[0..num_encoded_bytes];
                 udp_socket
                     .send_to(response, source) //Temporary until I have truncated
