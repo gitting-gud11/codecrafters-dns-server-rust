@@ -138,33 +138,26 @@ impl DNSQuestion {
             if label_octet == 0 {
                 //A pointer moves the index to the next byte to read after it's associated
                 //data has been parsed
-                let possible_label_pointer=index-2;
-                let field_offset=if label_pointer_set.contains(&possible_label_pointer) {0} else {1};
+                let possible_label_pointer = index - 2;
+                let field_offset = if label_pointer_set.contains(&possible_label_pointer) {
+                    0
+                } else {
+                    1
+                };
                 if current_domain_labels.is_empty() {
                     return (questions_list, index - 12); //Null terminator read (indicates malformed section might want error handling?)
                 } else if label_pointer_stack.is_empty() {
                     questions_list.push(DNSQuestion {
                         domain_labels: current_domain_labels.clone(),
-                        question_type: u16::from_be_bytes([data[index + field_offset], data[index + field_offset + 1]]),
-                        question_class: u16::from_be_bytes([data[index + field_offset +2 ], data[index + field_offset + 3]]),
+                        question_type: u16::from_be_bytes([
+                            data[index + field_offset],
+                            data[index + field_offset + 1],
+                        ]),
+                        question_class: u16::from_be_bytes([
+                            data[index + field_offset + 2],
+                            data[index + field_offset + 3],
+                        ]),
                     });
-                //     println!("question_type:{} and question_class:{}",u16::from_be_bytes([data[index + 1], data[index + 2]]),
-                // u16::from_be_bytes([data[index + 3], data[index + 4]]));
-                    // let a=u16::from_be_bytes([data[index + 1], data[index + 2]]);
-                    // let b=u16::from_be_bytes([data[index + 3], data[index + 4]]);
-                    // if(a==256 || b==256){
-                    //     println!("label pointer set {:?}",label_pointer_set);
-                    // for i in 12..index+5{
-                    //     println!("data[{}]={}",i,data[i]);
-                    // }
-                    // println!("{:?}",&data[index+1..index+5]);
-                    // let aa=u16::from_be_bytes([data[index], data[index + 1]]);
-                    // let bb=u16::from_be_bytes([data[index + 2], data[index + 3]]); //Seems like might have an index issue off by one
-                    // println!("current index={}",index);
-                    // println!("aa={} bb={}",aa,bb);
-                    // panic!();
-                    // }
-                    // assert!(a!=256 && b!=256);
                     label_pointer_set.clear();
                     current_domain_labels.clear();
                     index += 5; //Jump to beginning of next label
@@ -194,11 +187,7 @@ impl DNSQuestion {
                 index += label_octet + 1; //Jump to beginning of next label
             }
         }
-        let bytes_consumed = if question_count == 0 {
-            0
-        } else {
-            index - 12
-        };
+        let bytes_consumed = if question_count == 0 { 0 } else { index - 12 };
         (questions_list, bytes_consumed)
     }
 
@@ -380,9 +369,7 @@ impl DnsMessage {
         let message_header = DnsHeader::from_bytes(data[0..12].try_into().unwrap());
         let (message_questions, consumed_question_bytes) = DNSQuestion::from_bytes(data);
         index += consumed_question_bytes;
-        // println!("data[{}]={}",index,data[index]);
         let (message_answers, _consumed_answer_bytes) = DNSAnswer::from_bytes(&data[index..]);
-        // println!("data {:?}",data);
         DnsMessage {
             header: message_header,
             questions: message_questions,
@@ -479,9 +466,6 @@ impl DnsMessage {
         udp_socket: &UdpSocket,
         forwarding_address: &str,
     ) -> Vec<DNSAnswer> {
-        // let udp_socket = UdpSocket::bind("127.0.0.1:2054").expect("Failed to bind to address");
-        DNSQuestion::print_questions_sequence(question_list);
-        println!("In build_response_answer");
         let forwarding_messages: Vec<([u8; 512], usize)> = question_list
             .iter()
             .map(|question| DnsMessage::construct_forwarding_message(question, dns_query_header))
@@ -497,25 +481,16 @@ impl DnsMessage {
                 forwarding_address,
             );
         }
-        // println!("question_list.len()={}",question_list.len());
         for _ in 0..question_list.len() {
             match udp_socket.recv_from(&mut buf) {
                 Ok((_, _source)) => {
                     //Want to verify the source
-                    // println!("Hello friends");
-                    // println!("forwarding address")
                     // if source.ip().to_string() != forwarding_address {
                     //     continue;
                     // }
                     let response_message = DnsMessage::from_bytes(&buf);
-                    // DnsMessage::print_message(&response_message);
-                    let returned_answers=response_message.answers;
-                    // println!("returned answers.len()={}",returned_answers.len());
+                    let returned_answers = response_message.answers;
                     received_answers.extend_from_slice(&returned_answers);
-                    // println!("received_answers.len()={}",received_answers.len());
-                    //Clear the buffer
-                    // buf = [0;512];
-                    // received_answers.extend(response_message.)
                 }
                 Err(e) => {
                     eprintln!(
@@ -526,26 +501,6 @@ impl DnsMessage {
             }
         }
         received_answers
-        // for seq in &received_answers{
-        //     DNSAnswer::print_answers_sequence(seq);
-        // }
-        // // DNSAnswer::print_answers_sequence(received_answers);
-        // println!("received_answer.len()={} pre-flatten",received_answers.len());
-        // received_answers.into_iter().flatten().collect()
-    }
-
-    fn build_response_answer_hardcode(question_list: &[DNSQuestion]) -> Vec<DNSAnswer> {
-        question_list
-            .iter()
-            .map(|question| DNSAnswer {
-                domain_labels: question.domain_labels.clone(),
-                answer_type: 1,
-                answer_class: 1,
-                time_to_live: 60,
-                length: 4,
-                data: vec![8, 8, 8, 8],
-            })
-            .collect()
     }
 
     fn build_response_header(dns_query_header: &DnsHeader, acount: u16) -> DnsHeader {
@@ -570,23 +525,18 @@ impl DnsMessage {
         }
     }
 
-    pub fn build_response(dns_query: &DnsMessage,udp_socket: &UdpSocket,forwarding_address: &str) -> DnsMessage {
+    pub fn build_response(
+        dns_query: &DnsMessage,
+        udp_socket: &UdpSocket,
+        forwarding_address: &str,
+    ) -> DnsMessage {
         let response_questions = dns_query.questions.clone();
-        DNSQuestion::print_questions_sequence(&response_questions); //Appear to have an issue with storing question type and class
-        // let response_answers =DnsMessage::build_response_answer_hardcode(&response_questions);
         let response_answers = DnsMessage::build_response_answer(
             &dns_query.header,
             &response_questions,
             udp_socket,
             forwarding_address,
         );
-        // DNSAnswer::print_answers_sequence(&response_answers);
-        // println!("response_answer.len() after flatten is {}",response_answers.len());
-        // let response_answers = DnsMessage::build_response_answer(
-        //     &dns_query.header,
-        //     &response_questions,
-        //     forwarding_address,
-        // );
         let response_additional = dns_query.additional.clone();
         let response_header =
             DnsMessage::build_response_header(&dns_query.header, response_answers.len() as u16);
@@ -605,7 +555,7 @@ impl DnsMessage {
     ) -> ([u8; 512], usize) {
         let dns_query_message = DnsMessage::query_from_bytes(query);
         let dns_response_message =
-            DnsMessage::build_response(&dns_query_message,udp_socket,forwarding_address);
+            DnsMessage::build_response(&dns_query_message, udp_socket, forwarding_address);
         DnsMessage::to_bytes(&dns_response_message)
     }
 
@@ -640,9 +590,9 @@ fn main() {
             command_arguments
                 .get(2)
                 .map(String::as_str)
-                .unwrap_or("1.1.1.1")
+                .unwrap_or("1.1.1.1:53")
         } else {
-            "1.1.1.1"
+            "1.1.1.1:53"
         };
 
     loop {
@@ -650,7 +600,7 @@ fn main() {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
                 let (response_buffer, num_encoded_bytes) =
-                    DnsMessage::response_to_query_bytes(&buf, &udp_socket,forwarding_server);
+                    DnsMessage::response_to_query_bytes(&buf, &udp_socket, forwarding_server);
                 let response = &response_buffer[0..num_encoded_bytes];
                 udp_socket
                     .send_to(response, source) //Temporary until I have truncated
